@@ -183,3 +183,59 @@ print(df_sql.count())
 df_json = spark.read.option("multiline", "true").json("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/logistics_shipment_detail_3000.json")
 display(df_json)
 df_json.printSchema()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ###Standardizations:
+# MAGIC
+# MAGIC - Add a column
+# MAGIC - Source File: DF of logistics_shipment_detail_3000.json domain as 'Logistics', current timestamp 'ingestion_timestamp' and 'False' as 'is_expedited'
+# MAGIC - Column Uniformity: role - Convert to lowercase
+# MAGIC - Source File: DF of merged(logistics_source1 & logistics_source2)
+# MAGIC - vehicle_type - Convert values to UPPERCASE
+# MAGIC - Source Files: DF of logistics_shipment_detail_3000.json 
+# MAGIC - hub_location - Convert values to initcap case
+# MAGIC - Source Files: DF of merged(logistics_source1 & logistics_source2)
+# MAGIC - Format Standardization:
+# MAGIC - Source Files: DF of logistics_shipment_detail_3000.json
+# MAGIC - Convert shipment_date to yyyy-MM-dd
+# MAGIC - Ensure shipment_cost has 2 decimal precision
+# MAGIC - Data Type Standardization
+# MAGIC - Standardizing column data types to fix schema drift and enable mathematical operations.
+# MAGIC - Source File: DF of merged(logistics_source1 & logistics_source2)
+# MAGIC - age: Cast String to Integer
+# MAGIC - Source File: DF of logistics_shipment_detail_3000.json
+# MAGIC - shipment_weight_kg: Cast to Double
+# MAGIC - Source File: DF of logistics_shipment_detail_3000.json
+# MAGIC - is_expedited: Cast to Boolean
+# MAGIC - Naming Standardization
+# MAGIC - Source File: DF of merged(logistics_source1 & logistics_source2)
+# MAGIC - Rename: first_name to staff_first_name
+# MAGIC - Rename: last_name to staff_last_name
+# MAGIC - Rename: hub_location to origin_hub_city
+# MAGIC - Reordering columns logically in a better standard format:
+# MAGIC - Source File: DF of Data from all 3 files
+# MAGIC - shipment_id (Identifier), staff_first_name (Dimension)staff_last_name (Dimension), role (Dimension), origin_hub_city (Location), shipment_cost (Metric), ingestion_timestamp (Audit)
+
+# COMMAND ----------
+
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+
+df_json = spark.read.option("multiline", "true")\
+    .json("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/logistics_shipment_detail_3000.json")\
+    .withColumn("sourcefile", regexp_extract(col("_metadata.file_path"), r"([^/]+)$", 1)) \
+    .withColumn("ingestion_timestamp", current_timestamp()) \
+    .withColumn("is_expedited", lit("false"))  # Use boolean literal, not string
+
+display(df_json)
+df_json.count()
+df_json_standardized = df_json\
+    .withColumn("vehicle_type", upper(col("vehicle_type")))\
+    .withColumn("shipment_date", to_date(col("shipment_date"), "yy-MM-dd"))\
+    .withColumn("shipment_cost", col("shipment_cost").cast("decimal(10,2)"))\
+    .withColumn("is_expedited", col("is_expedited").cast(BooleanType()))
+
+display(df_json_standardized)
+df_json_standardized.printSchema()
