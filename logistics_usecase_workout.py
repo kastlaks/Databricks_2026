@@ -82,8 +82,8 @@ set1 =spark.read.csv("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/
 set2 =spark.read.csv("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/logistics_source2.txt",header=True)
 #set1.printSchema()
 #set2.printSchema()
-set1.withColumn("source", lit("system1")).write.mode("overwrite").parquet("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/schemMerging")
-set2.withColumn("source", lit("system2")).write.mode("append").parquet("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/schemMerging")
+set1.withColumn("source", lit("system1")).withColumn("load_Dt",current_timestamp()).write.mode("overwrite").parquet("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/schemMerging")
+set2.withColumn("source", lit("system2")).withColumn("load_Dt",current_timestamp()).write.mode("append").parquet("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/schemMerging")
 df_merged=spark.read.parquet("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/schemMerging",mergeSchema=True)
 df_merged.printSchema()
 df_merged.show()
@@ -187,36 +187,37 @@ df_json.printSchema()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ###Standardizations:
+# MAGIC Standardizations:<br>
 # MAGIC
-# MAGIC - Add a column
-# MAGIC - Source File: DF of logistics_shipment_detail_3000.json domain as 'Logistics', current timestamp 'ingestion_timestamp' and 'False' as 'is_expedited'
-# MAGIC - Column Uniformity: role - Convert to lowercase
-# MAGIC - Source File: DF of merged(logistics_source1 & logistics_source2)
-# MAGIC - vehicle_type - Convert values to UPPERCASE
-# MAGIC - Source Files: DF of logistics_shipment_detail_3000.json 
-# MAGIC - hub_location - Convert values to initcap case
-# MAGIC - Source Files: DF of merged(logistics_source1 & logistics_source2)
-# MAGIC - Format Standardization:
-# MAGIC - Source Files: DF of logistics_shipment_detail_3000.json
-# MAGIC - Convert shipment_date to yyyy-MM-dd
-# MAGIC - Ensure shipment_cost has 2 decimal precision
-# MAGIC - Data Type Standardization
-# MAGIC - Standardizing column data types to fix schema drift and enable mathematical operations.
-# MAGIC - Source File: DF of merged(logistics_source1 & logistics_source2)
-# MAGIC - age: Cast String to Integer
-# MAGIC - Source File: DF of logistics_shipment_detail_3000.json
-# MAGIC - shipment_weight_kg: Cast to Double
-# MAGIC - Source File: DF of logistics_shipment_detail_3000.json
-# MAGIC - is_expedited: Cast to Boolean
-# MAGIC - Naming Standardization
-# MAGIC - Source File: DF of merged(logistics_source1 & logistics_source2)
-# MAGIC - Rename: first_name to staff_first_name
-# MAGIC - Rename: last_name to staff_last_name
-# MAGIC - Rename: hub_location to origin_hub_city
-# MAGIC - Reordering columns logically in a better standard format:
-# MAGIC - Source File: DF of Data from all 3 files
-# MAGIC - shipment_id (Identifier), staff_first_name (Dimension)staff_last_name (Dimension), role (Dimension), origin_hub_city (Location), shipment_cost (Metric), ingestion_timestamp (Audit)
+# MAGIC 1. Add a column<br> 
+# MAGIC Source File: DF of logistics_shipment_detail_3000.json<br>: domain as 'Logistics',  current timestamp 'ingestion_timestamp' and 'False' as 'is_expedited'
+# MAGIC 2. Column Uniformity: 
+# MAGIC role - Convert to lowercase<br>
+# MAGIC Source File: DF of merged(logistics_source1 & logistics_source2)<br>
+# MAGIC vehicle_type - Convert values to UPPERCASE<br>
+# MAGIC Source Files: DF of logistics_shipment_detail_3000.json
+# MAGIC hub_location - Convert values to initcap case<br>
+# MAGIC Source Files: DF of merged(logistics_source1 & logistics_source2)<br>
+# MAGIC 3. Format Standardization:<br>
+# MAGIC Source Files: DF of logistics_shipment_detail_3000.json<br>
+# MAGIC Convert shipment_date to yyyy-MM-dd<br>
+# MAGIC Ensure shipment_cost has 2 decimal precision<br>
+# MAGIC 4. Data Type Standardization<br>
+# MAGIC Standardizing column data types to fix schema drift and enable mathematical operations.<br>
+# MAGIC Source File: DF of merged(logistics_source1 & logistics_source2) <br>
+# MAGIC age: Cast String to Integer<br>
+# MAGIC Source File: DF of logistics_shipment_detail_3000.json<br>
+# MAGIC shipment_weight_kg: Cast to Double<br>
+# MAGIC Source File: DF of logistics_shipment_detail_3000.json<br>
+# MAGIC is_expedited: Cast to Boolean<br>
+# MAGIC 5. Naming Standardization <br>
+# MAGIC Source File: DF of merged(logistics_source1 & logistics_source2)<br>
+# MAGIC Rename: first_name to staff_first_name<br>
+# MAGIC Rename: last_name to staff_last_name<br>
+# MAGIC Rename: hub_location to origin_hub_city<br>
+# MAGIC 6. Reordering columns logically in a better standard format:<br>
+# MAGIC Source File: DF of Data from all 3 files<br>
+# MAGIC shipment_id (Identifier), staff_first_name (Dimension)staff_last_name (Dimension), role (Dimension), origin_hub_city (Location), shipment_cost (Metric), ingestion_timestamp (Audit)
 
 # COMMAND ----------
 
@@ -226,6 +227,7 @@ from pyspark.sql.types import *
 df_json = spark.read.option("multiline", "true")\
     .json("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/logistics_shipment_detail_3000.json")\
     .withColumn("sourcefile", regexp_extract(col("_metadata.file_path"), r"([^/]+)$", 1)) \
+    .withColumn("domain",lit("logistics")) \
     .withColumn("ingestion_timestamp", current_timestamp()) \
     .withColumn("is_expedited", lit("false"))  # Use boolean literal, not string
 
@@ -239,3 +241,68 @@ df_json_standardized = df_json\
 
 display(df_json_standardized)
 df_json_standardized.printSchema()
+
+#DSL
+df_dsl_standardized = df_dsl.withColumn("role",lower(col("role")))\
+    .withColumn("hub_location",initcap(col("hub_location")))\
+    .withColumn("age",col("age").cast("int"))\
+    .withColumnRenamed("first_name","staff_first_name")\
+    .withColumnRenamed("last_name","staff_last_name")\
+        .withColumnRenamed("hub_location","origin_hub_city")\
+        .withColumn("ingestion_timestamp",current_timestamp())
+df_dsl_standardized.printSchema()
+display(df_dsl_standardized)   
+print(df_dsl_standardized.count())     
+
+#SQL
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ###Deduplication:
+# MAGIC
+# MAGIC Apply Record Level De-Duplication
+# MAGIC Apply Column Level De-Duplication (Primary Key Enforcement)
+
+# COMMAND ----------
+
+df_dsl_deduplicate=df_dsl_standardized.dropDuplicates().dropDuplicates(["shipment_id"])
+df_json_deduplicate=df_json_standardized.dropDuplicates().dropDuplicates(["order_id"])
+print(df_dsl_deduplicate.count())
+print(df_json_deduplicate.count())
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ##2. Data Enrichment - Detailing of data
+# MAGIC Makes your data rich and detailed <br>
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ###### Adding of Columns (Data Enrichment)
+# MAGIC *Creating new derived attributes to enhance traceability and analytical capability.*
+# MAGIC
+# MAGIC **1. Add Audit Timestamp (`load_dt`)**
+# MAGIC Source File: DF of logistics_source1 and logistics_source2<br>
+# MAGIC * **Scenario:** We need to track exactly when this record was ingested into our Data Lakehouse for auditing purposes.
+# MAGIC * **Action:** Add a column `load_dt` using the function `current_timestamp()`.
+# MAGIC
+# MAGIC **2. Create Full Name (`full_name`)**
+# MAGIC Source File: DF of logistics_source1 and logistics_source2<br>
+# MAGIC * **Scenario:** The reporting dashboard requires a single field for the driver's name instead of separate columns.
+# MAGIC * **Action:** Create `full_name` by concatenating `first_name` and `last_name` with a space separator.
+# MAGIC * **Result:** "Rajesh" + " " + "Kumar" -> **"Rajesh Kumar"**
+# MAGIC
+# MAGIC **3. Define Route Segment (`route_segment`)**
+# MAGIC Source File: DF of logistics_shipment_detail_3000.json<br>
+# MAGIC * **Scenario:** The logistics team wants to analyze performance based on specific transport lanes (Source to Destination).
+# MAGIC * **Action:** Combine `source_city` and `destination_city` with a hyphen.
+# MAGIC * **Result:** "Chennai" + "-" + "Pune" -> **"Chennai-Pune"**
+# MAGIC
+# MAGIC **4. Generate Vehicle Identifier (`vehicle_identifier`)**
+# MAGIC Source File: DF of logistics_shipment_detail_3000.json<br>
+# MAGIC * **Scenario:** We need a unique tracking code that immediately tells us the vehicle type and the shipment ID.
+# MAGIC * **Action:** Combine `vehicle_type` and `shipment_id` to create a composite key.
+# MAGIC * **Result:** "Truck" + "_" + "500001" -> **"Truck_500001"**
