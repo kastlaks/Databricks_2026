@@ -306,8 +306,22 @@ print(df_json_deduplicate.count())
 # MAGIC **4. Generate Vehicle Identifier (`vehicle_identifier`)**
 # MAGIC Source File: DF of logistics_shipment_detail_3000.json<br>
 # MAGIC * **Scenario:** We need a unique tracking code that immediately tells us the vehicle type and the shipment ID.
+# MAGIC
 # MAGIC * **Action:** Combine `vehicle_type` and `shipment_id` to create a composite key.
 # MAGIC * **Result:** "Truck" + "_" + "500001" -> **"Truck_500001"**
+# MAGIC
+# MAGIC
+# MAGIC
+# MAGIC Remove/Eliminate (drop, select, selectExpr)
+# MAGIC Excluding unnecessary or redundant columns to optimize storage and privacy.
+# MAGIC Source File: DF of logistics_source1 and logistics_source2
+# MAGIC
+# MAGIC 1. Remove Redundant Name Columns
+# MAGIC
+# MAGIC Scenario: Since we have already created the full_name column in the Enrichment step, the individual name columns are now redundant and clutter the dataset.
+# MAGIC Action: Drop the first_name and last_name columns.
+# MAGIC Logic: df.drop("first_name", "last_name")
+# MAGIC
 
 # COMMAND ----------
 
@@ -350,7 +364,7 @@ display(df_json_enrich)
 # COMMAND ----------
 
 
-df_json_time_int=df_json_enrich.withColumn("shipment_year",year(col("shipment_date"))).withColumn("shipment_month",month(col("shipment_date"))).withColumn("shipment_day",dayofweek(col("shipment_date"))).withColumn("is_weekend",when((dayofweek(col("shipment_date")) == 1) | (dayofweek(col("shipment_date")) == 7) ,lit("True")).otherwise(lit("False"))).withColumn("is_expedited",when((col("shipment_status") == "IN_TRANSIT") | (col("shipment_status") == "DELIVERED"),lit("True")).otherwise(lit("False")))
+df_json_time_int=df_json_enrich.withColumn("shipment_year",year(col("shipment_date"))).withColumn("shipment_month",month(col("shipment_date"))).withColumn("WhatDay",dayofweek(col("shipment_date"))).withColumn("is_weekend",when((dayofweek(col("shipment_date")) == 1) | (dayofweek(col("shipment_date")) == 7) ,lit("True")).otherwise(lit("False"))).withColumn("is_expedited",when((col("shipment_status") == "IN_TRANSIT") | (col("shipment_status") == "DELIVERED"),lit("True")).otherwise(lit("False")))
 display(df_json_time_int)
 
 # COMMAND ----------
@@ -377,4 +391,176 @@ display(df_json_time_int)
 
 # COMMAND ----------
 
-df_json_time_int.withColumn
+df_json_enrich2 = df_json_time_int.withColumn("cost_per_kg",expr("try_divide(shipment_cost, shipment_weight_kg)")).withColumn("day_since_shipment",datediff(current_timestamp(),col("shipment_date"))).withColumn("tax_amount",col("shipment_cost")*lit(0.18))
+display(df_json_enrich2)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ##### Splitting & Merging/Melting of Columns
+# MAGIC *Reshaping columns to extract hidden values or combine fields for better analysis.*<br>
+# MAGIC Source File: DF of logistics_shipment_detail_3000.json<br>
+# MAGIC **1. Splitting (Extraction)**
+# MAGIC *Breaking one column into multiple to isolate key information.*
+# MAGIC * **Split Order Code:**
+# MAGIC   * **Action:** Split `order_id` ("ORD100000") into two new columns:
+# MAGIC     * `order_prefix` ("ORD")
+# MAGIC     * `order_sequence` ("100000")
+# MAGIC * **Split Date:**
+# MAGIC   * **Action:** Split `shipment_date` into three separate columns for partitioning:
+# MAGIC     * `ship_year` (2024)
+# MAGIC     * `ship_month` (4)
+# MAGIC     * `ship_day` (23)
+# MAGIC
+# MAGIC **2. Merging (Concatenation)**
+# MAGIC *Combining multiple columns into a single unique identifier or description.*
+# MAGIC * **Create Route ID:**
+# MAGIC   * **Action:** Merge `source_city` ("Chennai") and `destination_city` ("Pune") to create a descriptive route key:
+# MAGIC     * `route_lane` ("Chennai->Pune")
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+def substr_dynamic(colname, start, end=None):
+    if end is None:
+        # till end of string
+        return F.col(colname).substr(start, F.length(colname) - start + 1)
+    else:
+        # till given end position
+        return F.col(colname).substr(start, end - start + 1)
+
+df_json_enrich3 = df_json_enrich2 \
+    .withColumn("order_prefix", substr_dynamic("order_id", 1, 3)) \
+    .withColumn("order_sequence", F.expr("substr(order_id, 4, length(order_id) - 3)")).withColumn("Route_id",concat(col("source_city"),lit("->"),col("destination_city")))  # goes till end
+
+#df_json_enrich3 = df_json_enrich2.withColumn("order_prefix",col("order_id").substr(1,3)).withColumn("order_sequence",col("order_id").substr(4,10))
+display(df_json_enrich3)
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 3. Data Customization & Processing - Application of Tailored Business Specific Rules
+# MAGIC
+# MAGIC ### **UDF1: Complex Incentive Calculation**
+# MAGIC **Scenario:** The Logistics Head wants to calculate a "Performance Bonus" for drivers based on tenure and role complexity.
+# MAGIC
+# MAGIC **Action:** Create a Python function `calculate_bonus(role, age)` and register it as a Spark UDF.
+# MAGIC
+# MAGIC **Logic:**
+# MAGIC * **IF** `Role` == 'Driver' **AND** `Age` > 50:
+# MAGIC   * `Bonus` = 15% of Salary (Reward for Seniority)
+# MAGIC * **IF** `Role` == 'Driver' **AND** `Age` < 30:
+# MAGIC   * `Bonus` = 5% of Salary (Encouragement for Juniors)
+# MAGIC * **ELSE**:
+# MAGIC   * `Bonus` = 0
+# MAGIC
+# MAGIC **Result:** A new derived column `projected_bonus` is generated for every row in the dataset.
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ### **UDF2: PII Masking (Privacy Compliance)**
+# MAGIC **Scenario:** For the analytics dashboard, we must hide the full identity of the staff to comply with privacy laws (GDPR/DPDP), while keeping names recognizable for internal managers.
+# MAGIC
+# MAGIC **Business Rule:** Show the first 2 letters, mask the middle characters with `****`, and show the last letter.
+# MAGIC
+# MAGIC **Action:** Create a UDF `mask_identity(name)`.
+# MAGIC
+# MAGIC **Example:**
+# MAGIC * **Input:** `"Rajesh"`
+# MAGIC * **Output:** `"Ra****h"`
+# MAGIC <br>
+# MAGIC **Note: Convert the above udf logic to inbult function based transformation to ensure the performance is improved.**
+
+# COMMAND ----------
+
+def calculate_bonus(role,age):
+    if role.upper() == "DRIVER" and age>50:
+        return 0.15
+    elif role.upper() == "DRIVER" and age<30:
+        return 0.05
+    else:
+        return 0
+
+
+def mask_name(name):
+    if name is None or len(name) < 3:
+        return name
+    return name[:2] + "****" + name[-1] 
+      
+udf_calculate_bonus = udf(calculate_bonus, FloatType())
+udf_mask_name = udf(mask_name, StringType())
+df_dsl_enrich2 = df_dsl_enrich.withColumn("projected_bonus",udf_calculate_bonus(col("role"),col("age")).cast(DecimalType(10,2))).withColumn("masked_Full_name",udf_mask_name("full_name"))
+display(df_dsl_enrich2)
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 4. Data Core Curation & Processing (Pre-Wrangling)
+# MAGIC *Applying business logic to focus, filter, and summarize data before final analysis.*
+# MAGIC
+# MAGIC **1. Select (Projection)**<br>
+# MAGIC Source Files: DF of logistics_source1 and logistics_source2<br>
+# MAGIC * **Scenario:** The Driver App team only needs location data, not sensitive HR info.
+# MAGIC * **Action:** Select only `first_name`, `role`, and `hub_location`.
+# MAGIC
+# MAGIC **2. Filter (Selection)**<br>
+# MAGIC Source File: DF of json<br>
+# MAGIC * **Scenario:** We need a report on active operational problems.
+# MAGIC * **Action:** Filter rows where `shipment_status` is **'DELAYED'** or **'RETURNED'**.
+# MAGIC * **Scenario:** Insurance audit for senior staff.
+# MAGIC * **Action:** Filter rows where `age > 50`.
+# MAGIC
+# MAGIC **3. Derive Flags & Columns (Business Logic)**<br>
+# MAGIC Source File: DF of json<br>
+# MAGIC * **Scenario:** Identify high-value shipments for security tracking.
+# MAGIC * **Action:** Create flag `is_high_value` = **True** if `shipment_cost > 50,000`.
+# MAGIC * **Scenario:** Flag weekend operations for overtime calculation.
+# MAGIC * **Action:** Create flag `is_weekend` = **True** if day is Saturday or Sunday.
+# MAGIC
+# MAGIC **4. Format (Standardization)**<br>
+# MAGIC Source File: DF of json<br>
+# MAGIC * **Scenario:** Finance requires readable currency formats.
+# MAGIC * **Action:** Format `shipment_cost` to string like **"₹30,695.80"**.
+# MAGIC * **Scenario:** Standardize city names for reporting.
+# MAGIC * **Action:** Format `source_city` to Uppercase (e.g., "chennai" → **"CHENNAI"**).
+# MAGIC
+# MAGIC **5. Group & Aggregate (Summarization)**<br>
+# MAGIC Source Files: DF of logistics_source1 and logistics_source2<br>
+# MAGIC * **Scenario:** Regional staffing analysis.
+# MAGIC * **Action:** Group by `hub_location` and **Count** the number of staff.
+# MAGIC * **Scenario:** Fleet capacity analysis.
+# MAGIC * **Action:** Group by `vehicle_type` and **Sum** the `shipment_weight_kg`.
+# MAGIC
+# MAGIC **6. Sorting (Ordering)**<br>
+# MAGIC Source File: DF of json<br>
+# MAGIC * **Scenario:** Prioritize the most expensive shipments.
+# MAGIC * **Action:** Sort by `shipment_cost` in **Descending** order.
+# MAGIC * **Scenario:** Organize daily dispatch schedule.
+# MAGIC * **Action:** Sort by `shipment_date` (Ascending).
+# MAGIC
+# MAGIC **7. Limit (Top-N Analysis)**<br>
+# MAGIC Source File: DF of json<br>
+# MAGIC * **Scenario:** Dashboard snapshot of critical delays.
+# MAGIC * **Action:** Filter for 'DELAYED', Sort by Cost, and **Limit to top 10** rows.
+
+# COMMAND ----------
+
+display(df_dsl_enrich2.filter("age>50").select("full_name","masked_full_name","age","origin_hub_city"))
+
+display(df_json_enrich3.filter("shipment_status in ('DELAYED','RETURNED')"))
+
+display(df_json_enrich3.withColumn("is_high_value",when(col("shipment_cost")>40000,lit("True")).otherwise(lit("False"))).withColumn("formattedshipment_cost",F.concat(
+        F.lit("₹"),
+        F.format_number(F.col("shipment_cost"), 2)   # adds commas + 2 decimals
+        )).withColumn("source_city",upper(col("source_city" ))))
+
+
+display(df_dsl_enrich2.groupBy("origin_hub_city").agg(count("*").alias("staff_count")))
+display(df_json_enrich3.groupBy("vehicle_type").agg(sum("shipment_weight_kg").alias("total_weight")))
+
+display(df_json_enrich3.orderBy(col("shipment_cost").desc(), col("shipment_date")))
+
+display(df_json_enrich3.filter("shipment_status='DELIVERED'").orderBy(col("shipment_cost")).limit(10))
