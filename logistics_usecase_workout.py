@@ -44,6 +44,7 @@ df2.distinct().count()
 # Shipment IDs that appear in both master_v1 and master_v2
 from pyspark.sql.functions import col
 common_shipment_ids = df1.select("shipment_id").intersect(df2.select("shipment_id"))
+display(common_shipment_ids)
 display(common_shipment_ids.filter(common_shipment_ids.shipment_id.isNotNull()))
 common_shipment_ids.count()
 
@@ -93,6 +94,7 @@ df_merged.count()
 
 # MAGIC %md
 # MAGIC from pyspark.sql.types import IntegerType
+# MAGIC
 # MAGIC df_merged_casted = df_merged.withColumn("shipment_id", col("shipment_id").cast(IntegerType())) \
 # MAGIC                             .withColumn("age", col("age").cast(IntegerType()))
 # MAGIC
@@ -306,3 +308,73 @@ print(df_json_deduplicate.count())
 # MAGIC * **Scenario:** We need a unique tracking code that immediately tells us the vehicle type and the shipment ID.
 # MAGIC * **Action:** Combine `vehicle_type` and `shipment_id` to create a composite key.
 # MAGIC * **Result:** "Truck" + "_" + "500001" -> **"Truck_500001"**
+
+# COMMAND ----------
+
+#from pyspark.sql.functions import *
+
+
+df_dsl_enrich=df_dsl_deduplicate.withColumn("load_dt",current_timestamp()).withColumn("full_name",concat(col("staff_first_name"),lit(" "),col("staff_last_name"))).drop("staff_first_name","staff_last_name")
+
+display(df_dsl_enrich)
+
+df_json_enrich=df_json_deduplicate.withColumn("route_Segement",concat(col("source_city"),lit("-"),col("destination_city"))).withColumn("vehicle_identifier",concat(col("vehicle_type"),lit("_"),col("shipment_id")))
+
+display(df_json_enrich)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ###### Deriving of Columns (Time Intelligence)
+# MAGIC *Extracting temporal features from dates to enable period-based analysis and reporting.*<br>
+# MAGIC Source File: logistics_shipment_detail_3000.json<br>
+# MAGIC **1. Derive Shipment Year (`shipment_year`)**
+# MAGIC * **Scenario:** Management needs an annual performance report to compare growth year-over-year.
+# MAGIC * **Action:** Extract the year component from `shipment_date`.
+# MAGIC * **Result:** "2024-04-23" -> **2024**
+# MAGIC
+# MAGIC **2. Derive Shipment Month (`shipment_month`)**
+# MAGIC * **Scenario:** Analysts want to identify seasonal peaks (e.g., increased volume in December).
+# MAGIC * **Action:** Extract the month component from `shipment_date`.
+# MAGIC * **Result:** "2024-04-23" -> **4** (April)
+# MAGIC
+# MAGIC **3. Flag Weekend Operations (`is_weekend`)**
+# MAGIC * **Scenario:** The Operations team needs to track shipments handled during weekends to calculate overtime pay or analyze non-business day capacity.
+# MAGIC * **Action:** Flag as **'True'** if the `shipment_date` falls on a Saturday or Sunday.
+# MAGIC
+# MAGIC **4. Flag shipment status (`is_expedited`)**
+# MAGIC * **Scenario:** The Operations team needs to track shipments is IN_TRANSIT
+# MAGIC  or DELIVERED.
+# MAGIC * **Action:** Flag as **'True'** if the `shipment_status` IN_TRANSIT or DELIVERED.
+
+# COMMAND ----------
+
+
+df_json_time_int=df_json_enrich.withColumn("shipment_year",year(col("shipment_date"))).withColumn("shipment_month",month(col("shipment_date"))).withColumn("shipment_day",dayofweek(col("shipment_date"))).withColumn("is_weekend",when((dayofweek(col("shipment_date")) == 1) | (dayofweek(col("shipment_date")) == 7) ,lit("True")).otherwise(lit("False"))).withColumn("is_expedited",when((col("shipment_status") == "IN_TRANSIT") | (col("shipment_status") == "DELIVERED"),lit("True")).otherwise(lit("False")))
+display(df_json_time_int)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ###### Enrichment/Business Logics (Calculated Fields)
+# MAGIC *Deriving new metrics and financial indicators using mathematical and date-based operations.*<br>
+# MAGIC Source File: logistics_shipment_detail_3000.json<br>
+# MAGIC
+# MAGIC **1. Calculate Unit Cost (`cost_per_kg`)**
+# MAGIC * **Scenario:** The Finance team wants to analyze the efficiency of shipments by determining the cost incurred per unit of weight.
+# MAGIC * **Action:** Divide `shipment_cost` by `shipment_weight_kg`.
+# MAGIC * **Logic:** `shipment_cost / shipment_weight_kg`
+# MAGIC
+# MAGIC **2. Track Shipment Age (`days_since_shipment`)**
+# MAGIC * **Scenario:** The Operations team needs to monitor how long it has been since a shipment was dispatched to identify potential delays.
+# MAGIC * **Action:** Calculate the difference in days between the `current_date` and the `shipment_date`.
+# MAGIC * **Logic:** `datediff(current_date(), shipment_date)`
+# MAGIC
+# MAGIC **3. Compute Tax Liability (`tax_amount`)**
+# MAGIC * **Scenario:** For invoicing and compliance, we must calculate the Goods and Services Tax (GST) applicable to each shipment.
+# MAGIC * **Action:** Calculate 18% GST on the total `shipment_cost`.
+# MAGIC * **Logic:** `shipment_cost * 0.18`
+
+# COMMAND ----------
+
+df_json_time_int.withColumn
