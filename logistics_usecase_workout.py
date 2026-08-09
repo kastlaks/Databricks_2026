@@ -270,6 +270,8 @@ print(df_dsl_standardized.count())
 
 df_dsl_deduplicate=df_dsl_standardized.dropDuplicates().dropDuplicates(["shipment_id"])
 df_json_deduplicate=df_json_standardized.dropDuplicates().dropDuplicates(["order_id"])
+print(df_dsl_standardized.count())
+print(df_json_standardized.count())
 print(df_dsl_deduplicate.count())
 print(df_json_deduplicate.count())
 
@@ -549,7 +551,7 @@ display(df_dsl_enrich2)
 # COMMAND ----------
 
 display(df_dsl_enrich2.filter("age>50").select("full_name","masked_full_name","age","origin_hub_city"))
-
+staff_df=df_dsl_enrich2
 display(df_json_enrich3.filter("shipment_status in ('DELAYED','RETURNED')"))
 
 display(df_json_enrich3.withColumn("is_high_value",when(col("shipment_cost")>40000,lit("True")).otherwise(lit("False"))).withColumn("formattedshipment_cost",F.concat(
@@ -564,3 +566,141 @@ display(df_json_enrich3.groupBy("vehicle_type").agg(sum("shipment_weight_kg").al
 display(df_json_enrich3.orderBy(col("shipment_cost").desc(), col("shipment_date")))
 
 display(df_json_enrich3.filter("shipment_status='DELIVERED'").orderBy(col("shipment_cost")).limit(10))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 5. Data Wrangling - Transformation & Analytics
+# MAGIC *Combining, modeling, and analyzing data to answer complex business questions.*
+# MAGIC
+# MAGIC ### **1. Joins**
+# MAGIC Source Files:<br>
+# MAGIC Left Side (staff_df):<br> DF of logistics_source1 & logistics_source2<br>
+# MAGIC Right Side (shipments_df):<br> DF of logistics_shipment_detail_3000.json<br>
+# MAGIC #### **1.1 Frequently Used Simple Joins (Inner, Left)**
+# MAGIC * **Inner Join (Performance Analysis):**
+# MAGIC   * **Scenario:** We only want to analyze *completed work*. Connect Staff to the Shipments they handled.
+# MAGIC   * **Action:** Join `staff_df` and `shipments_df` on `shipment_id`.
+# MAGIC   * **Result:** Returns only rows where a staff member is assigned to a valid shipment.
+# MAGIC * **Left Join (Idle Resource check):**
+# MAGIC   * **Scenario:** Find out which staff members are currently *idle* (not assigned to any shipment).
+# MAGIC   * **Action:** Join `staff_df` (Left) with `shipments_df` (Right) on `shipment_id`. Filter where `shipments_df.shipment_id` is NULL.
+# MAGIC
+# MAGIC #### **1.2 Infrequent Simple Joins (Self, Right, Full, Cartesian)**
+# MAGIC * **Self Join (Peer Finding):**
+# MAGIC   * **Scenario:** Find all pairs of employees working in the same `hub_location`.
+# MAGIC   * **Action:** Join `staff_df` to itself on `hub_location`, filtering where `staff_id_A != staff_id_B`.
+# MAGIC * **Right Join (Orphan Data Check):**
+# MAGIC   * **Scenario:** Identify shipments in the system that have *no valid driver* assigned (Data Integrity Issue).
+# MAGIC   * **Action:** Join `staff_df` (Left) with `shipments_df` (Right). Focus on NULLs on the left side.
+# MAGIC * **Full Outer Join (Reconciliation):**
+# MAGIC   * **Scenario:** A complete audit to find *both* idle drivers AND unassigned shipments in one view.
+# MAGIC   * **Action:** Perform a Full Outer Join on `shipment_id`.
+# MAGIC * **Cartesian/Cross Join (Capacity Planning):**
+# MAGIC   * **Scenario:** Generate a schedule of *every possible* driver assignment to *every* pending shipment to run an optimization algorithm.
+# MAGIC   * **Action:** Cross Join `drivers_df` and `pending_shipments_df`.
+# MAGIC
+# MAGIC #### **1.3 Advanced Joins (Semi and Anti)**
+# MAGIC * **Left Semi Join (Existence Check):**
+# MAGIC   * **Scenario:** "Show me the details of Drivers who have *at least one* shipment." (Standard filtering).
+# MAGIC   * **Action:** `staff_df.join(shipments_df, "shipment_id", "left_semi")`.
+# MAGIC   * **Benefit:** Performance optimization; it stops scanning the right table once a match is found.
+# MAGIC * **Left Anti Join (Negation Check):**
+# MAGIC   * **Scenario:** "Show me the details of Drivers who have *never* touched a shipment."
+# MAGIC   * **Action:** `staff_df.join(shipments_df, "shipment_id", "left_anti")`.
+# MAGIC
+# MAGIC ### **2. Lookup**<br>
+# MAGIC Source File: DF of logistics_source1 and logistics_source2 (merged into Staff DF) and Master_City_List.csv<br>
+# MAGIC * **Scenario:** Validation. Check if the `hub_location` in the staff file exists in the dataframe of corporate `Master_City_List.csv`.
+# MAGIC * **Action:** Compare values against this Master_City_List list.
+# MAGIC
+# MAGIC ### **3. Lookup & Enrichment**<br>
+# MAGIC Source File: DF of logistics_source1 and logistics_source2 (merged into Staff DF) and Master_City_List.csv dataframe<br>
+# MAGIC * **Scenario:** Geo-Tagging.
+# MAGIC * **Action:** Lookup `hub_location` (eg. "Pune") in a Master Latitude/Longitude Master_City_List.csv dataframe and enrich our logistics_source (merged dataframe) by adding `lat` and `long` columns for map plotting.
+# MAGIC
+# MAGIC ### **4. Schema Modeling (Denormalization)**<br>
+# MAGIC Source Files: DF of All 3 Files (logistics_source1, logistics_source2, logistics_shipment_detail_3000.json)<br>
+# MAGIC * **Scenario:** Creating a "Gold Layer" Table for PowerBI/Tableau.
+# MAGIC * **Action:** Flatten the Star Schema. Join `Staff`, `Shipments`, and `Vehicle_Master` into one wide table (`wide_shipment_history`) so analysts don't have to perform joins during reporting.
+# MAGIC
+# MAGIC ### **5. Windowing (Ranking & Trends)**<br>
+# MAGIC Source Files:<br>
+# MAGIC DF of logistics_source2: Provides hub_location (Partition Key).<br>
+# MAGIC logistics_shipment_detail_3000.json: Provides shipment_cost (Ordering Key)<br>
+# MAGIC * **Scenario:** "Who are the Top 3 Drivers by Cost in *each* Hub?"
+# MAGIC * **Action:**
+# MAGIC   1. Partition by `hub_location`.
+# MAGIC   2. Order by `total_shipment_cost` Descending.
+# MAGIC   3. Apply `dense_rank()` and `row_number()
+# MAGIC   4. Filter where `rank or row_number <= 3`.
+# MAGIC
+# MAGIC ### **6. Analytical Functions (Lead/Lag)**<br>
+# MAGIC Source File: <br>
+# MAGIC DF of logistics_shipment_detail_3000.json<br>
+# MAGIC * **Scenario:** Idle Time Analysis.
+# MAGIC * **Action:** For each driver, calculate the days elapsed since their *previous* shipment.
+# MAGIC
+# MAGIC ### **7. Set Operations**<br>
+# MAGIC Source Files: DF of logistics_source1 and logistics_source2<br>
+# MAGIC * **Union:** Combining `Source1` (Legacy) and `Source2` (Modern) into one dataset (Already done in Active Munging).
+# MAGIC * **Intersect:** Identifying Staff IDs that appear in *both* Source 1 and Source 2 (Duplicate/Migration Check).
+# MAGIC * **Except (Difference):** Identifying Staff IDs present in Source 2 but *missing* from Source 1 (New Hires).
+# MAGIC
+# MAGIC ### **8. Grouping & Aggregations (Advanced)**<br>
+# MAGIC Source Files:<br>
+# MAGIC DF of logistics_source2: Provides hub_location and vehicle_type (Grouping Dimensions).<br>
+# MAGIC DF of logistics_shipment_detail_3000.json: Provides shipment_cost (Aggregation Metric).<br>
+# MAGIC * **Scenario:** The CFO wants a subtotal report at multiple levels:
+# MAGIC   1. Total Cost by Hub.
+# MAGIC   2. Total Cost by Hub AND Vehicle Type.
+# MAGIC   3. Grand Total.
+# MAGIC * **Action:** Use `cube("hub_location", "vehicle_type")` or `rollup()` to generate all these subtotals in a single query.
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col
+from pyspark.sql.types import DecimalType
+
+
+staff_df=df_dsl_enrich2
+shipment_df=df_json_enrich3
+
+display(staff_df.limit(10))
+display(shipment_df.limit(10))
+
+display(staff_df.join(shipment_df,'shipment_id','inner').limit(10))
+
+display(staff_df.join(shipment_df,'shipment_id','full_outer').limit(10))
+
+display(staff_df.join(shipment_df.alias("sh"),'shipment_id','left').filter(col("sh.shipment_id").isNull()).limit(10))
+
+display(staff_df.alias("st").join(shipment_df.alias("sh"),'shipment_id','right').filter(col("st.shipment_id").isNull()).limit(10))
+display(staff_df.alias("st1").join(staff_df.alias("st2"),'shipment_id').where(col("st1.origin_hub_city") == col("st2.origin_hub_city")).limit(10))
+
+
+driver_df=staff_df.filter("UPPER(role)='DRIVER'")
+display(driver_df.limit(10))
+
+pending_df=shipment_df.filter("UPPER(shipment_status)!='DELIVERED'")
+display(pending_df.limit(10))
+
+display(driver_df.join(pending_df,'shipment_id','inner').limit(10))
+
+display(staff_df.join(shipment_df.alias("sh"),'shipment_id','left_semi').limit(10))
+display(staff_df.join(shipment_df.alias("sh"),'shipment_id','left_anti').limit(10))
+master_city_df=spark.read.option("header","true").format("csv").load("/Volumes/izwd37dev/wd37db/rawdatta/BB2/logistics_use_case/Master_City_List.csv").withColumnRenamed("city_name","origin_hub_city").withColumn("latitude",col("latitude").cast(DecimalType(10,4))).withColumn("longitude",col("longitude").cast(DecimalType(10,4)))
+display(master_city_df.limit(10))
+
+display(staff_df.join(master_city_df,'origin_hub_city','semi').limit(10))
+
+display(staff_df.alias("st").join(master_city_df.alias("mc"),'origin_hub_city','inner').select("st.*","mc.latitude","mc.longitude").limit(10))
+from pyspark.sql.window import Window
+from pyspark.sql.functions import row_number
+w = Window.partitionBy("hub_location").orderBy("shipment_cost")
+df2.show()
+df2.printSchema()
+df_json_enrich.show()
+df_json_enrich.printSchema()
+df2.join(df_json_enrich,'shipment_id','inner').withColumn("ranking",dense_rank().over(w)).filter(col("ranking")<4).show()
+
